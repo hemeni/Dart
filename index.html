@@ -56,7 +56,7 @@ input[type=range]{width:100%}
 </style>
 </head>
 <body>
-<h1><span>🎯 Dartscorer med kamera <small style="color:var(--acc)">v5 · lyd + udgang</small></span><small id="topinfo"></small></h1>
+<h1><span>🎯 Dartscorer med kamera <small style="color:var(--acc)">v6 · uden kamera</small></span><small id="topinfo"></small></h1>
 <div id="app"></div>
 <input type="file" id="file" accept="image/*" capture="environment" class="hide">
 <video id="video" playsinline muted class="hide"></video>
@@ -334,12 +334,12 @@ function render(){
   if(st==='setup'){ app.innerHTML=setupHTML(); viewEl=null; return; }
   if(!viewEl||!document.body.contains(viewEl)){
     app.innerHTML=`<div class="grid"><div><div id="viewWrap"><canvas id="view"></canvas><div id="badge"></div></div><div id="underView"></div></div><div id="side"></div></div>`;
-    viewEl=$('#view'); viewEl.width=S.W; viewEl.height=S.H; viewCtx=viewEl.getContext('2d');
+    viewEl=$('#view'); viewEl.width=S.mode==='manual'?600:S.W; viewEl.height=S.mode==='manual'?600:S.H; viewCtx=viewEl.getContext('2d');
     viewEl.addEventListener('pointerdown',onViewTap);
   }
   $('#side').innerHTML=sideHTML();
   $('#underView').innerHTML=underHTML();
-  $('#badge').textContent={source:'Vælg kilde',calib:'Kalibrér',play:S.mode==='live'?'Live-kamera':'Foto-tilstand'}[st]||'';
+  $('#badge').textContent={source:'Vælg kilde',calib:'Kalibrér',play:S.mode==='live'?'Live-kamera':S.mode==='manual'?'Uden kamera – tryk på skiven':'Foto-tilstand'}[st]||'';
 }
 function setupHTML(){
   const s=S.setup;
@@ -354,7 +354,7 @@ function setupHTML(){
    <div class="seg">${[301,501,701].map(n=>`<button data-act="start" data-v="${n}" class="${s.start===n?'on':''}">${n}</button>`).join('')}</div>
    <label>Afslutning</label>
    <div class="seg"><button data-act="dout" data-v="1" class="${s.dout?'on':''}">Double out</button><button data-act="dout" data-v="0" class="${!s.dout?'on':''}">Straight out</button></div>
-   <div class="row"><button class="pri" data-act="go">Videre til kamera →</button></div>
+   <div class="row"><button class="pri" data-act="go">Videre til kamera →</button><button data-act="manual0">🎯 Spil uden kamera</button></div>
   </div>`;
 }
 function sideHTML(){
@@ -368,6 +368,7 @@ function sideHTML(){
         <button class="pri" data-act="startLive" ${S.live?'disabled':''}>📹 Start live-kamera</button>
         <button data-act="photo">📷 Foto-tilstand</button>
       </div>
+      <div class="row"><button data-act="manual0">🎯 Spil uden kamera</button></div>
       ${S.live?`<div class="row"><button class="pri" data-act="freeze">Frys billedet og kalibrér (tom skive)</button></div>`:''}
       <p class="hint" style="margin-top:12px"><b>Live:</b> finder selv pilene, når hånden er væk. <b>Foto:</b> du tager et billede efter hver kast (eller efter alle tre), og appen finder pilene.</p>
     </div>`;
@@ -430,11 +431,11 @@ function sideHTML(){
 function underHTML(){
   if(S.stage!=='play') return '';
   return `<div class="panel" style="margin-top:10px">
-    <label style="margin-top:0">Følsomhed for pil-genkendelse: <b id="thv">${S.thresh}</b> <span class="hint">(lavere = mere følsom)</span></label>
-    <input type="range" min="12" max="60" value="${S.thresh}" id="thr">
+    ${S.mode==='manual'?'':`<label style="margin-top:0">Følsomhed for pil-genkendelse: <b id="thv">${S.thresh}</b> <span class="hint">(lavere = mere følsom)</span></label>
+    <input type="range" min="12" max="60" value="${S.thresh}" id="thr">`}
     <div class="row"><button data-act="sndOn">${S.snd.on?'🔊 Lyd: til':'🔇 Lyd: fra'}</button><button data-act="sndLang">Sprog: ${S.snd.lang==='en'?'English (PDC)':'Dansk'}</button></div>
     <div class="row"><button data-act="sndAfter">Sig rest efter hver pil: ${S.snd.afterDart?'ja':'nej'}</button><button data-act="sndTest">Test stemmen</button></div>
-    <div class="row"><button data-act="recal">Ny kalibrering</button><button data-act="newgame" class="bad">Nyt spil</button></div>
+    <div class="row"><button data-act="recal">${S.mode==='manual'?'Skift til kamera':'Ny kalibrering'}</button><button data-act="newgame" class="bad">Nyt spil</button></div>
   </div>`;
 }
 function calibSVG(n){
@@ -454,8 +455,11 @@ function boardPolyline(r,steps=96){
 function loop(){
   requestAnimationFrame(loop);
   if(!viewCtx||!viewEl) return;
-  if(S.live&&!S.frozen&&video.readyState>=2) capCtx.drawImage(video,0,0,S.W,S.H);
-  viewCtx.drawImage(cap,0,0);
+  if(S.mode==='manual'&&S.stage==='play') viewCtx.drawImage(getBoardCache(),0,0);
+  else {
+    if(S.live&&!S.frozen&&video.readyState>=2) capCtx.drawImage(video,0,0,S.W,S.H);
+    viewCtx.drawImage(cap,0,0);
+  }
   if(S.Hb){
     viewCtx.lineWidth=1.5; viewCtx.strokeStyle='rgba(47,208,138,.85)';
     for(const r of [170,162,107,99,15.9,6.35]){
@@ -511,12 +515,14 @@ fileIn.addEventListener('change',async()=>{
 // ---------- kalibrering ----------
 function onViewTap(ev){
   const r=viewEl.getBoundingClientRect();
-  const x=(ev.clientX-r.left)/r.width*S.W, y=(ev.clientY-r.top)/r.height*S.H;
+  const x=(ev.clientX-r.left)/r.width*viewEl.width, y=(ev.clientY-r.top)/r.height*viewEl.height;
   if(S.stage==='calib'){
     if(S.pts.length>=4) return;
     S.pts.push([x,y]);
     if(S.pts.length===4) computeCalib();
     render();
+  }else if(S.stage==='play'&&S.mode==='manual'&&!S.fixing){
+    if(G.winner<0) addDartAtImage(x,y);
   }else if(S.stage==='play'&&S.fixing){
     S.fixing=false;
     const snap=hist[hist.length-1];
@@ -542,6 +548,7 @@ function computeCalib(){
 function snapshot(type){ hist.push({type,G:JSON.stringify(G),marks:JSON.stringify(S.marks),er:S.expectRemoval}); if(hist.length>200)hist.shift(); }
 function restore(s){ stopSay(); G=JSON.parse(s.G); S.marks=JSON.parse(s.marks); S.expectRemoval=s.er; }
 function addDartAtImage(x,y){
+  if(S.mode==='manual'){ const k=300/200; addDart(dartFromBoard((x-300)/k,(y-300)/k),x,y); return; }
   if(!S.Hi) return;
   const [bx,by]=applyH(S.Hi,x,y);
   addDart(dartFromBoard(bx,by),x,y);
@@ -550,12 +557,13 @@ function addDart(d,x,y){
   if(G.winner>=0) return;
   if(S.expectRemoval){S.expectRemoval=false;}
   snapshot('dart');
+  if(S.mode==='manual'&&G.turn.length===0&&x!=null) S.marks=[];
   if(x!=null) S.marks.push({x,y,label:d.label});
   const pi=G.cur;
   const res=addDartTo(G,d);
   announceDart(res,d,pi);
   S.msg = res==='bust' ? 'BUST – scoren for turen annulleres.' : res==='win' ? '' : '';
-  if(res==='bust'||res==='turn') S.expectRemoval=true;
+  if((res==='bust'||res==='turn')&&S.mode!=='manual') S.expectRemoval=true;
   if(S.marks.length>6) S.marks=S.marks.slice(-6);
   render();
 }
@@ -603,20 +611,23 @@ setInterval(()=>{
 },150);
 
 // ---------- manuelt bræt ----------
-function drawBoard(){
-  const c=$('#boardCanvas'),x=c.getContext('2d'),cx=230,cy=230,k=cx/200; // 200 mm = kant
-  x.clearRect(0,0,460,460); x.fillStyle='#111'; x.beginPath(); x.arc(cx,cy,cx,0,7); x.fill();
+function paintBoard(x,size){
+  const cx=size/2,cy=size/2,k=cx/200; // 200 mm = kant
+  x.clearRect(0,0,size,size); x.fillStyle='#111'; x.beginPath(); x.arc(cx,cy,cx,0,7); x.fill();
   function seg(r1,r2,a1,a2,col){x.beginPath();x.arc(cx,cy,r2*k,a1,a2);x.arc(cx,cy,r1*k,a2,a1,true);x.closePath();x.fillStyle=col;x.fill();}
   for(let i=0;i<20;i++){
     const a1=(i*18-9-90)*Math.PI/180,a2=(i*18+9-90)*Math.PI/180, even=i%2===0;
     const sing=even?'#1a1a1a':'#e8dcc0', ring=even?'#d9382f':'#1f9d55';
     seg(15.9,99,a1,a2,sing); seg(99,107,a1,a2,ring); seg(107,162,a1,a2,sing); seg(162,170,a1,a2,ring);
-    const a=(i*18-90)*Math.PI/180; x.fillStyle='#fff'; x.font='bold 20px sans-serif'; x.textAlign='center'; x.textBaseline='middle';
+    const a=(i*18-90)*Math.PI/180; x.fillStyle='#fff'; x.font='bold '+Math.round(size/23)+'px sans-serif'; x.textAlign='center'; x.textBaseline='middle';
     x.fillText(ORDER[i],cx+185*k*Math.cos(a),cy+185*k*Math.sin(a));
   }
   x.beginPath();x.arc(cx,cy,15.9*k,0,7);x.fillStyle='#1f9d55';x.fill();
   x.beginPath();x.arc(cx,cy,6.35*k,0,7);x.fillStyle='#d9382f';x.fill();
 }
+function drawBoard(){ paintBoard($('#boardCanvas').getContext('2d'),460); }
+let boardCache=null;
+function getBoardCache(){ if(!boardCache){boardCache=document.createElement('canvas');boardCache.width=boardCache.height=600;paintBoard(boardCache.getContext('2d'),600);} return boardCache; }
 $('#boardCanvas').addEventListener('pointerdown',ev=>{
   const c=$('#boardCanvas'),r=c.getBoundingClientRect();
   const px=(ev.clientX-r.left)/r.width*460-230, py=(ev.clientY-r.top)/r.height*460-230;
@@ -657,6 +668,13 @@ app.addEventListener('click',e=>{
   else if(a==='dout'){S.setup.dout=v==='1';render();}
   else if(a==='go'){S.stage='source';S.hasSize=false;S.mode=null;render();}
   else if(a==='startLive') startLive();
+  else if(a==='manual0'){
+    if(S.live&&video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());}
+    S.live=false; S.mode='manual'; S.frozen=false; S.Hi=null;S.Hb=null;S.pts=[]; S.stage='play'; S.expectRemoval=false; S.msg=''; S.marks=[]; hist.length=0;
+    G=newGame(S.setup.names.slice(0,S.setup.n).map((n,i)=>n.trim()||('Spiller '+(i+1))),S.setup.start,S.setup.dout);
+    viewEl=null; render();
+    say(TXT[S.snd.lang].gameOn); callRequire();
+  }
   else if(a==='photo'){fileIn.click();}
   else if(a==='freeze'){ S.frozen=true; S.stage='calib'; S.pts=[];S.Hi=null;S.Hb=null; render(); }
   else if(a==='undoPt'){S.pts.pop();S.Hi=null;S.Hb=null;render();}
@@ -671,14 +689,14 @@ app.addEventListener('click',e=>{
   else if(a==='fix'){ S.fixing=!S.fixing; if(S.fixing&&!(hist.length&&hist[hist.length-1].type==='dart')){S.fixing=false;S.msg='Ingen pil at rette.';} render(); }
   else if(a==='coChart'){ showCo(); }
   else if(a==='manual'){ drawBoard(); $('#modal').classList.remove('hide'); }
-  else if(a==='endturn'){ snapshot('end'); endTurnManual(G); S.expectRemoval=true; S.msg=''; render(); stopSay(); callRequire(); }
+  else if(a==='endturn'){ snapshot('end'); endTurnManual(G); S.expectRemoval=S.mode!=='manual'; S.msg=''; render(); stopSay(); callRequire(); }
   else if(a==='sndOn'){ S.snd.on=!S.snd.on; if(!S.snd.on) stopSay(); saveSnd(); render(); if(S.snd.on) say(TXT[S.snd.lang].test); }
   else if(a==='sndLang'){ S.snd.lang=S.snd.lang==='en'?'da':'en'; saveSnd(); render(); stopSay(); say(TXT[S.snd.lang].test); }
   else if(a==='sndAfter'){ S.snd.afterDart=!S.snd.afterDart; saveSnd(); render(); }
   else if(a==='sndTest'){ stopSay(); say(TXT[S.snd.lang].test); }
   else if(a==='removed'){ S.expectRemoval=false; S.prev=S.baseline; S.msg=''; render(); }
-  else if(a==='nextLeg'){ nextLeg(G); S.expectRemoval=true; S.marks=[]; hist.length=0; render(); say(TXT[S.snd.lang].gameOn); callRequire(); }
-  else if(a==='recal'){ S.stage=S.live?'source':'source'; S.frozen=false; S.pts=[];S.Hi=null;S.Hb=null;S.hasSize=false; S.marks=[]; render(); }
+  else if(a==='nextLeg'){ nextLeg(G); S.expectRemoval=S.mode!=='manual'; S.marks=[]; hist.length=0; render(); say(TXT[S.snd.lang].gameOn); callRequire(); }
+  else if(a==='recal'){ if(S.mode==='manual'){S.mode=null;viewEl=null;} S.stage='source'; S.frozen=false; S.pts=[];S.Hi=null;S.Hb=null;S.hasSize=false; S.marks=[]; render(); }
   else if(a==='newgame'){ if(S.live&&video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());S.live=false;} S.stage='setup'; S.Hi=null;S.Hb=null;S.pts=[]; render(); }
 });
 render(); requestAnimationFrame(loop);
