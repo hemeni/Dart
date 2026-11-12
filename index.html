@@ -268,6 +268,53 @@ const S={stage:'setup',mode:null,live:false,frozen:false,W:640,H:480,Hi:null,Hb:
   motion:false,lastMotion:0,smPrev:null,busy:false,setup:{n:2,names:['Spiller 1','Spiller 2','Spiller 3','Spiller 4'],start:501,dout:true}};
 let G=null; const hist=[];
 
+// ---------- stemme (som en turnerings-caller) ----------
+function loadSnd(){
+  const d={on:true,lang:'en',afterDart:false};
+  try{ const s=JSON.parse(localStorage.getItem('dartSnd')||'null'); if(s) return Object.assign(d,s); }catch(e){}
+  return d;
+}
+function saveSnd(){ try{localStorage.setItem('dartSnd',JSON.stringify(S.snd));}catch(e){} }
+S.snd=loadSnd();
+const TXT={
+  en:{lang:'en-GB',t:'Treble',d:'Double',bull:'Bullseye',miss:'No score',bust:'Bust!',gameOn:'Game on!',s180:'One hundred and eighty!',
+      req:(n,r)=>`${n}, you require ${r}`,left:r=>`${r} left`,shot:n=>`Game shot! ${n} wins the leg.`,test:'Treble twenty. One hundred and eighty!'},
+  da:{lang:'da-DK',t:'Triple',d:'Dobbelt',bull:'Bullseye',miss:'Forbi',bust:'Bust!',gameOn:'Spillet starter!',s180:'Et hundrede og firs!',
+      req:(n,r)=>`${n}, du skal bruge ${r}`,left:r=>`${r} tilbage`,shot:n=>`Game shot! ${n} vinder legget.`,test:'Triple tyve. Et hundrede og firs!'}
+};
+function pickVoice(lang){
+  try{
+    const vs=speechSynthesis.getVoices(), l=lang.toLowerCase();
+    return vs.find(v=>v.lang.replace('_','-').toLowerCase()===l)||vs.find(v=>v.lang.toLowerCase().startsWith(l.slice(0,2)));
+  }catch(e){return null;}
+}
+function say(text,o){
+  if(!S.snd.on||!('speechSynthesis' in window)) return;
+  o=o||{};
+  try{
+    const u=new SpeechSynthesisUtterance(text), lang=TXT[S.snd.lang].lang;
+    u.lang=lang; const v=pickVoice(lang); if(v) u.voice=v;
+    u.rate=o.rate||1; u.pitch=o.pitch||1; u.volume=1;
+    speechSynthesis.speak(u);
+  }catch(e){}
+}
+function stopSay(){ try{speechSynthesis.cancel();}catch(e){} }
+function spokenDart(d){
+  const T=TXT[S.snd.lang];
+  if(d.score===0) return T.miss;
+  if(d.num===25) return d.mult===2?T.bull:'25';
+  return d.mult===3?`${T.t} ${d.num}`:d.mult===2?`${T.d} ${d.num}`:String(d.num);
+}
+function callRequire(){ const p=G.players[G.cur]; say(TXT[S.snd.lang].req(p.name,p.rem)); }
+function announceDart(res,d,pi){
+  const T=TXT[S.snd.lang], p=G.players[pi];
+  say(spokenDart(d));
+  if(res==='ok'){ if(S.snd.afterDart) say(T.left(p.rem)); }
+  else if(res==='turn'){ const sc=p.last.score; if(sc===180) say(T.s180,{rate:.9,pitch:1.15}); else say(String(sc)); callRequire(); }
+  else if(res==='bust'){ say(T.bust,{pitch:.9}); callRequire(); }
+  else if(res==='win'){ say(T.shot(p.name),{pitch:1.1}); }
+}
+
 function setSize(iw,ih){
   const W=640,H=Math.round(W*ih/iw);
   S.W=W;S.H=H;cap.width=W;cap.height=H; sm.width=160; sm.height=Math.round(160*ih/iw);
@@ -385,6 +432,8 @@ function underHTML(){
   return `<div class="panel" style="margin-top:10px">
     <label style="margin-top:0">Følsomhed for pil-genkendelse: <b id="thv">${S.thresh}</b> <span class="hint">(lavere = mere følsom)</span></label>
     <input type="range" min="12" max="60" value="${S.thresh}" id="thr">
+    <div class="row"><button data-act="sndOn">${S.snd.on?'🔊 Lyd: til':'🔇 Lyd: fra'}</button><button data-act="sndLang">Sprog: ${S.snd.lang==='en'?'English (PDC)':'Dansk'}</button></div>
+    <div class="row"><button data-act="sndAfter">Sig rest efter hver pil: ${S.snd.afterDart?'ja':'nej'}</button><button data-act="sndTest">Test stemmen</button></div>
     <div class="row"><button data-act="recal">Ny kalibrering</button><button data-act="newgame" class="bad">Nyt spil</button></div>
   </div>`;
 }
@@ -491,7 +540,7 @@ function computeCalib(){
 
 // ---------- spil ----------
 function snapshot(type){ hist.push({type,G:JSON.stringify(G),marks:JSON.stringify(S.marks),er:S.expectRemoval}); if(hist.length>200)hist.shift(); }
-function restore(s){ G=JSON.parse(s.G); S.marks=JSON.parse(s.marks); S.expectRemoval=s.er; }
+function restore(s){ stopSay(); G=JSON.parse(s.G); S.marks=JSON.parse(s.marks); S.expectRemoval=s.er; }
 function addDartAtImage(x,y){
   if(!S.Hi) return;
   const [bx,by]=applyH(S.Hi,x,y);
@@ -502,7 +551,9 @@ function addDart(d,x,y){
   if(S.expectRemoval){S.expectRemoval=false;}
   snapshot('dart');
   if(x!=null) S.marks.push({x,y,label:d.label});
+  const pi=G.cur;
   const res=addDartTo(G,d);
+  announceDart(res,d,pi);
   S.msg = res==='bust' ? 'BUST – scoren for turen annulleres.' : res==='win' ? '' : '';
   if(res==='bust'||res==='turn') S.expectRemoval=true;
   if(S.marks.length>6) S.marks=S.marks.slice(-6);
@@ -614,14 +665,19 @@ app.addEventListener('click',e=>{
     S.baseline=grabGray(); S.prev=S.baseline; S.frozen=false; S.stage='play'; S.expectRemoval=false; S.msg=''; S.marks=[]; hist.length=0;
     G=newGame(S.setup.names.slice(0,S.setup.n).map((n,i)=>n.trim()||('Spiller '+(i+1))),S.setup.start,S.setup.dout);
     S.smPrev=null; render();
+    say(TXT[S.snd.lang].gameOn); callRequire();
   }
   else if(a==='undo'){ if(hist.length){restore(hist.pop());S.msg='';render();} }
   else if(a==='fix'){ S.fixing=!S.fixing; if(S.fixing&&!(hist.length&&hist[hist.length-1].type==='dart')){S.fixing=false;S.msg='Ingen pil at rette.';} render(); }
   else if(a==='coChart'){ showCo(); }
   else if(a==='manual'){ drawBoard(); $('#modal').classList.remove('hide'); }
-  else if(a==='endturn'){ snapshot('end'); endTurnManual(G); S.expectRemoval=true; S.msg=''; render(); }
+  else if(a==='endturn'){ snapshot('end'); endTurnManual(G); S.expectRemoval=true; S.msg=''; render(); stopSay(); callRequire(); }
+  else if(a==='sndOn'){ S.snd.on=!S.snd.on; if(!S.snd.on) stopSay(); saveSnd(); render(); if(S.snd.on) say(TXT[S.snd.lang].test); }
+  else if(a==='sndLang'){ S.snd.lang=S.snd.lang==='en'?'da':'en'; saveSnd(); render(); stopSay(); say(TXT[S.snd.lang].test); }
+  else if(a==='sndAfter'){ S.snd.afterDart=!S.snd.afterDart; saveSnd(); render(); }
+  else if(a==='sndTest'){ stopSay(); say(TXT[S.snd.lang].test); }
   else if(a==='removed'){ S.expectRemoval=false; S.prev=S.baseline; S.msg=''; render(); }
-  else if(a==='nextLeg'){ nextLeg(G); S.expectRemoval=true; S.marks=[]; hist.length=0; render(); }
+  else if(a==='nextLeg'){ nextLeg(G); S.expectRemoval=true; S.marks=[]; hist.length=0; render(); say(TXT[S.snd.lang].gameOn); callRequire(); }
   else if(a==='recal'){ S.stage=S.live?'source':'source'; S.frozen=false; S.pts=[];S.Hi=null;S.Hb=null;S.hasSize=false; S.marks=[]; render(); }
   else if(a==='newgame'){ if(S.live&&video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());S.live=false;} S.stage='setup'; S.Hi=null;S.Hb=null;S.pts=[]; render(); }
 });
