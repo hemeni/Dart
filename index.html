@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Dartscorer med kamera</title>
+<style>
+:root{--bg:#0f1417;--panel:#182025;--panel2:#202b32;--line:#2c3a43;--txt:#eef3f5;--mut:#92a3ad;--acc:#2fd08a;--warn:#ffb347;--bad:#ff6b6b;--blue:#5aa9ff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{padding:12px;min-height:100vh}
+h1{font-size:18px;margin:0 0 10px;display:flex;gap:10px;align-items:center;justify-content:space-between}
+h1 small{color:var(--mut);font-weight:400;font-size:13px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+.grid{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:12px;align-items:start}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+button{font:inherit;color:var(--txt);background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-height:46px;cursor:pointer}
+button:active{transform:scale(.98)}
+button.pri{background:var(--acc);color:#04140c;border-color:var(--acc);font-weight:700}
+button.warn{background:#3a2c14;border-color:#7a5a20;color:var(--warn)}
+button.bad{background:#3a1a1a;border-color:#7a2a2a;color:var(--bad)}
+button:disabled{opacity:.4}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.row>button{flex:1 1 140px}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+input[type=text]{width:100%;font:inherit;color:var(--txt);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px}
+select{font:inherit;color:var(--txt);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:11px;width:100%}
+.seg{display:flex;gap:6px}
+.seg button{flex:1}
+.seg button.on{background:var(--acc);color:#04140c;border-color:var(--acc);font-weight:700}
+#viewWrap{position:relative;background:#000;border-radius:14px;overflow:hidden;border:1px solid var(--line)}
+canvas#view{width:100%;height:auto;display:block;touch-action:manipulation}
+#badge{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.65);padding:6px 10px;border-radius:999px;font-size:13px}
+.players{display:grid;gap:8px}
+.pl{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:10px 12px;border-radius:12px;background:var(--panel2);border:2px solid transparent}
+.pl.cur{border-color:var(--acc)}
+.pl .nm{font-weight:600}
+.pl .rem{grid-row:1/3;grid-column:2;font-size:44px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums;align-self:center}
+.pl .st{color:var(--mut);font-size:13px}
+.chips{display:flex;gap:8px;margin:10px 0;min-height:44px}
+.chip{flex:1;text-align:center;padding:10px 0;border-radius:10px;background:var(--bg);border:1px dashed var(--line);font-size:20px;font-weight:700;min-height:44px}
+.chip.f{border-style:solid;border-color:var(--acc)}
+.chip small{display:block;font-size:11px;color:var(--mut);font-weight:400}
+.hint{color:var(--mut);font-size:13px;line-height:1.5}
+.note{background:#2a2412;border:1px solid #6b5a1e;color:#ffd978;border-radius:10px;padding:10px;font-size:13px;line-height:1.45;margin-top:10px}
+.ok{background:#112a1d;border:1px solid #1e6b44;color:#8fe8bd}
+.big{font-size:22px;font-weight:800}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:flex;align-items:center;justify-content:center;z-index:10;padding:12px}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px;max-width:520px;width:100%}
+.modal canvas{width:100%;height:auto;display:block;touch-action:manipulation}
+input[type=range]{width:100%}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<h1><span>🎯 Dartscorer med kamera</span><small id="topinfo"></small></h1>
+<div id="app"></div>
+<input type="file" id="file" accept="image/*" capture="environment" class="hide">
+<video id="video" playsinline muted class="hide"></video>
+<div id="modal" class="modal hide"><div class="box">
+  <div class="hint" style="margin-bottom:8px">Tryk på skiven for at indtaste en pil manuelt</div>
+  <canvas id="boardCanvas" width="460" height="460"></canvas>
+  <div class="row"><button id="mMiss">Forbi skiven (0)</button><button id="mClose">Luk</button></div>
+</div></div>
+
+<script>
+/*CORE-START*/
+const ORDER=[20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5];
+const R={bull:6.35,outerBull:15.9,tripleIn:99,tripleOut:107,doubleIn:162,doubleOut:170};
+
+// Pilens placering på skiven (mm fra centrum, x mod højre, y nedad) -> felt og point
+function dartFromBoard(x,y){
+  const r=Math.hypot(x,y);
+  if(r>R.doubleOut) return {num:0,mult:0,score:0,label:'Miss'};
+  if(r<=R.bull) return {num:25,mult:2,score:50,label:'Bull'};
+  if(r<=R.outerBull) return {num:25,mult:1,score:25,label:'25'};
+  const ang=(Math.atan2(x,-y)*180/Math.PI+360)%360;
+  const idx=Math.floor(((ang+9)%360)/18);
+  const num=ORDER[idx];
+  let mult=1;
+  if(r>=R.tripleIn&&r<=R.tripleOut) mult=3; else if(r>=R.doubleIn) mult=2;
+  return {num,mult,score:num*mult,label:(mult===3?'T':mult===2?'D':'')+num};
+}
+
+// ---- Homografi (4 punkter) ----
+function solveLinear(A,b){
+  const n=b.length;
+  const M=A.map((row,i)=>row.concat([b[i]]));
+  for(let c=0;c<n;c++){
+    let p=c; for(let r=c+1;r<n;r++) if(Math.abs(M[r][c])>Math.abs(M[p][c])) p=r;
+    if(Math.abs(M[p][c])<1e-12) return null;
+    [M[c],M[p]]=[M[p],M[c]];
+    for(let r=0;r<n;r++){ if(r===c) continue; const f=M[r][c]/M[c][c]; for(let k=c;k<=n;k++) M[r][k]-=f*M[c][k]; }
+  }
+  return M.map((row,i)=>row[n]/row[i]);
+}
+function homography(src,dst){
+  const A=[],b=[];
+  for(let i=0;i<4;i++){
+    const [x,y]=src[i],[u,v]=dst[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]); b.push(u);
+    A.push([0,0,0,x,y,1,-v*x,-v*y]); b.push(v);
+  }
+  const h=solveLinear(A,b); if(!h) return null;
+  return h.concat([1]);
+}
+function applyH(H,x,y){ const w=H[6]*x+H[7]*y+H[8]; return [(H[0]*x+H[1]*y+H[2])/w,(H[3]*x+H[4]*y+H[5])/w,w]; }
+function invert3(m){
+  const [a,b,c,d,e,f,g,h,i]=m;
+  const A=e*i-f*h,B=-(d*i-f*g),C=d*h-e*g;
+  const det=a*A+b*B+c*C; if(Math.abs(det)<1e-14) return null;
+  return [A/det,-(b*i-c*h)/det,(b*f-c*e)/det,B/det,(a*i-c*g)/det,-(a*f-c*d)/det,C/det,-(a*h-b*g)/det,(a*e-b*d)/det];
+}
+// Kalibreringspunkter: yderkanten af dobbeltringen ved fire wires, 90° fra hinanden
+// (20|1 øverst, 6|10 til højre, 3|19 nederst, 11|14 til venstre)
+const CALIB_ANGLES=[9,99,189,279];
+function calibBoardPts(){ return CALIB_ANGLES.map(a=>{const t=a*Math.PI/180;return [R.doubleOut*Math.sin(t),-R.doubleOut*Math.cos(t)];}); }
+
+// ---- Billedbehandling (gråtone-arrays) ----
+function blur3(g,w,h){
+  const o=new Uint8Array(w*h);
+  for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    o[i]=(g[i-w-1]+g[i-w]+g[i-w+1]+g[i-1]+g[i]+g[i+1]+g[i+w-1]+g[i+w]+g[i+w+1])/9;
+  }
+  return o;
+}
+function morphOpen(m,w,h){
+  const e=new Uint8Array(w*h), o=new Uint8Array(w*h);
+  for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    if(m[i]&&m[i-1]&&m[i+1]&&m[i-w]&&m[i+w]) e[i]=1;
+  }
+  for(let y=1;y<h-1;y++) for(let x=1;x<w-1;x++){
+    const i=y*w+x;
+    if(e[i]||e[i-1]||e[i+1]||e[i-w]||e[i+w]) o[i]=1;
+  }
+  return o;
+}
+// Finder nye pile = forskel mellem to billeder; returnerer pilespidser (største blob først)
+function findDarts(prev,cur,w,h,mask,opt){
+  opt=opt||{}; const T=opt.T||28, minArea=opt.minArea||20, maxN=opt.max||3;
+  const d=new Uint8Array(w*h);
+  for(let i=0;i<d.length;i++) if(mask[i] && Math.abs(cur[i]-prev[i])>T) d[i]=1;
+  const m=morphOpen(d,w,h);
+  const seen=new Uint8Array(w*h), blobs=[], stack=new Int32Array(w*h);
+  for(let s=0;s<m.length;s++){
+    if(!m[s]||seen[s]) continue;
+    let sp=0; stack[sp++]=s; seen[s]=1; const px=[];
+    while(sp){
+      const i=stack[--sp]; px.push(i);
+      const x=i%w, y=(i/w)|0;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+        if(!dx&&!dy) continue;
+        const nx=x+dx, ny=y+dy; if(nx<0||ny<0||nx>=w||ny>=h) continue;
+        const j=ny*w+nx; if(m[j]&&!seen[j]){seen[j]=1;stack[sp++]=j;}
+      }
+    }
+    if(px.length>=minArea) blobs.push(px);
+  }
+  blobs.sort((a,b)=>b.length-a.length);
+  return blobs.slice(0,maxN).map(px=>blobTip(px,w));
+}
+// Spidsen = den tynde ende af blobben langs hovedaksen (flights er brede, spidsen er smal)
+function blobTip(px,w){
+  const n=px.length; let mx=0,my=0;
+  const xs=new Float32Array(n), ys=new Float32Array(n);
+  for(let k=0;k<n;k++){xs[k]=px[k]%w; ys[k]=(px[k]/w)|0; mx+=xs[k]; my+=ys[k];}
+  mx/=n; my/=n;
+  let sxx=0,syy=0,sxy=0;
+  for(let k=0;k<n;k++){const dx=xs[k]-mx,dy=ys[k]-my; sxx+=dx*dx; syy+=dy*dy; sxy+=dx*dy;}
+  const th=0.5*Math.atan2(2*sxy,sxx-syy), ax=Math.cos(th), ay=Math.sin(th);
+  let tmin=1e9,tmax=-1e9; const t=new Float32Array(n);
+  for(let k=0;k<n;k++){t[k]=(xs[k]-mx)*ax+(ys[k]-my)*ay; if(t[k]<tmin)tmin=t[k]; if(t[k]>tmax)tmax=t[k];}
+  const L=tmax-tmin;
+  if(L<10) return {x:mx,y:my,area:n,length:L};
+  let cLo=0,cHi=0; for(let k=0;k<n;k++){ if(t[k]<tmin+.25*L)cLo++; else if(t[k]>tmax-.25*L)cHi++; }
+  const tipLow=cLo<=cHi; // færrest pixels = tyndest = spids
+  let sx=0,sy=0,c=0;
+  for(let k=0;k<n;k++){
+    const near = tipLow ? t[k]<tmin+.08*L : t[k]>tmax-.08*L;
+    if(near){sx+=xs[k];sy+=ys[k];c++;}
+  }
+  return {x:sx/c,y:sy/c,area:n,length:L};
+}
+
+// ---- Spil ----
+function newGame(names,start,dout){
+  return {start,dout,players:names.map(n=>({name:n,rem:start,legs:0,pts:0,darts:0,last:null})),cur:0,legStarter:0,turn:[],turnStartRem:start,winner:-1};
+}
+function finishTurn(G,bust){
+  const p=G.players[G.cur];
+  const sc=bust?0:G.turn.reduce((a,d)=>a+d.score,0);
+  p.pts+=sc; p.darts+=G.turn.length;
+  p.last={darts:G.turn.map(d=>d.label),score:sc,bust};
+  G.cur=(G.cur+1)%G.players.length; G.turn=[]; G.turnStartRem=G.players[G.cur].rem;
+}
+function addDartTo(G,d){
+  if(G.winner>=0) return 'over';
+  const p=G.players[G.cur]; G.turn.push(d);
+  const nr=p.rem-d.score;
+  const bust = nr<0 || (G.dout&&nr===1) || (nr===0&&G.dout&&d.mult!==2);
+  if(bust){ p.rem=G.turnStartRem; finishTurn(G,true); return 'bust'; }
+  p.rem=nr;
+  if(nr===0){
+    p.pts+=G.turn.reduce((a,x)=>a+x.score,0); p.darts+=G.turn.length;
+    p.last={darts:G.turn.map(x=>x.label),score:G.turn.reduce((a,x)=>a+x.score,0),bust:false};
+    p.legs++; G.winner=G.cur; return 'win';
+  }
+  if(G.turn.length===3){ finishTurn(G,false); return 'turn'; }
+  return 'ok';
+}
+function endTurnManual(G){ if(G.turn.length===0) { G.cur=(G.cur+1)%G.players.length; G.turnStartRem=G.players[G.cur].rem; return; } finishTurn(G,false); }
+function nextLeg(G){
+  G.players.forEach(p=>p.rem=G.start);
+  G.legStarter=(G.legStarter+1)%G.players.length; G.cur=G.legStarter; G.turn=[]; G.turnStartRem=G.start; G.winner=-1;
+}
+const PREF=[20,16,8,10,12,18,4,6,14,2,24,22,26,28,30,32,34,36,38,40,1,3,5,7,9,11,13,15,17,19,21,23,25];
+function checkout(rem,dout){
+  if(rem<1||(dout&&rem<2)||rem>170) return null;
+  const all=[];
+  for(let n=1;n<=20;n++){ all.push({l:'T'+n,s:3*n,d:false}); }
+  for(let n=1;n<=20;n++){ all.push({l:String(n),s:n,d:false}); }
+  all.push({l:'25',s:25,d:false});
+  const dbl=[]; for(let n=1;n<=20;n++) dbl.push({l:'D'+n,s:2*n,d:true,n}); dbl.push({l:'Bull',s:50,d:true,n:25});
+  dbl.sort((a,b)=>PREF.indexOf(a.s)-PREF.indexOf(b.s));
+  const firsts=all.concat(dbl).sort((a,b)=>b.s-a.s);
+  const finals=dout?dbl:all.concat(dbl);
+  for(const f of finals) if(f.s===rem) return [f.l];
+  for(const a of firsts) for(const f of finals) if(a.s+f.s===rem) return [a.l,f.l];
+  for(const a of firsts) for(const b of firsts) for(const f of finals) if(a.s+b.s+f.s===rem) return [a.l,b.l,f.l];
+  return null;
+}
+/*CORE-END*/
+
+// =================== UI ===================
+const $=s=>document.querySelector(s);
+const video=$('#video'), fileIn=$('#file'), app=$('#app');
+const cap=document.createElement('canvas'), capCtx=cap.getContext('2d',{willReadFrequently:true});
+const sm=document.createElement('canvas'), smCtx=sm.getContext('2d',{willReadFrequently:true});
+let viewEl=null, viewCtx=null;
+
+const S={stage:'setup',mode:null,live:false,frozen:false,W:640,H:480,Hi:null,Hb:null,mask:null,maskN:0,
+  pts:[],baseline:null,prev:null,thresh:28,expectRemoval:false,fixing:false,msg:'',marks:[],camErr:'',
+  motion:false,lastMotion:0,smPrev:null,busy:false,setup:{n:2,names:['Spiller 1','Spiller 2','Spiller 3','Spiller 4'],start:501,dout:true}};
+let G=null; const hist=[];
+
+function setSize(iw,ih){
+  const W=640,H=Math.round(W*ih/iw);
+  S.W=W;S.H=H;cap.width=W;cap.height=H; sm.width=160; sm.height=Math.round(160*ih/iw);
+  if(viewEl){viewEl.width=W;viewEl.height=H;}
+}
+function grayOf(canvas,ctx,w,h,doBlur){
+  const d=ctx.getImageData(0,0,w,h).data, g=new Uint8Array(w*h);
+  for(let i=0,j=0;i<g.length;i++,j+=4) g[i]=d[j]*.3+d[j+1]*.59+d[j+2]*.11;
+  return doBlur?blur3(g,w,h):g;
+}
+function grabGray(){ return grayOf(cap,capCtx,S.W,S.H,true); }
+
+// ---------- render ----------
+function render(){
+  const st=S.stage;
+  $('#topinfo').textContent = G&&st==='play' ? (G.start+(G.dout?' · double-out':'')) : '';
+  if(st==='setup'){ app.innerHTML=setupHTML(); viewEl=null; return; }
+  if(!viewEl||!document.body.contains(viewEl)){
+    app.innerHTML=`<div class="grid"><div><div id="viewWrap"><canvas id="view"></canvas><div id="badge"></div></div><div id="underView"></div></div><div id="side"></div></div>`;
+    viewEl=$('#view'); viewEl.width=S.W; viewEl.height=S.H; viewCtx=viewEl.getContext('2d');
+    viewEl.addEventListener('pointerdown',onViewTap);
+  }
+  $('#side').innerHTML=sideHTML();
+  $('#underView').innerHTML=underHTML();
+  $('#badge').textContent={source:'Vælg kilde',calib:'Kalibrér',play:S.mode==='live'?'Live-kamera':'Foto-tilstand'}[st]||'';
+}
+function setupHTML(){
+  const s=S.setup;
+  let names='';
+  for(let i=0;i<s.n;i++) names+=`<label>Spiller ${i+1}</label><input type="text" data-name="${i}" value="${s.names[i].replace(/"/g,'&quot;')}">`;
+  return `<div class="panel" style="max-width:560px;margin:0 auto">
+   <div class="big" style="margin-bottom:6px">Nyt spil</div>
+   <label>Antal spillere</label>
+   <div class="seg">${[1,2,3,4].map(n=>`<button data-act="n" data-v="${n}" class="${s.n===n?'on':''}">${n}</button>`).join('')}</div>
+   ${names}
+   <label>Startscore</label>
+   <div class="seg">${[301,501,701].map(n=>`<button data-act="start" data-v="${n}" class="${s.start===n?'on':''}">${n}</button>`).join('')}</div>
+   <label>Afslutning</label>
+   <div class="seg"><button data-act="dout" data-v="1" class="${s.dout?'on':''}">Double out</button><button data-act="dout" data-v="0" class="${!s.dout?'on':''}">Straight out</button></div>
+   <div class="row"><button class="pri" data-act="go">Videre til kamera →</button></div>
+  </div>`;
+}
+function sideHTML(){
+  const st=S.stage;
+  if(st==='source'){
+    return `<div class="panel">
+      <div class="big">Vælg hvordan billedet tages</div>
+      <p class="hint">Sæt tabletten fast, så den ser hele skiven <b>lige på</b> og ikke flytter sig. Skiven skal vende rigtigt (20 øverst), og kameraet må ikke være spejlvendt.</p>
+      ${S.camErr?`<div class="note">${S.camErr}</div>`:''}
+      <div class="row">
+        <button class="pri" data-act="startLive" ${S.live?'disabled':''}>📹 Start live-kamera</button>
+        <button data-act="photo">📷 Foto-tilstand</button>
+      </div>
+      ${S.live?`<div class="row"><button class="pri" data-act="freeze">Frys billedet og kalibrér (tom skive)</button></div>`:''}
+      <p class="hint" style="margin-top:12px"><b>Live:</b> finder selv pilene, når hånden er væk. <b>Foto:</b> du tager et billede efter hver kast (eller efter alle tre), og appen finder pilene.</p>
+    </div>`;
+  }
+  if(st==='calib'){
+    const n=S.pts.length;
+    const names=['20|1 øverst','6|10 til højre','3|19 nederst','11|14 til venstre'];
+    return `<div class="panel">
+      <div class="big">Kalibrér skiven ${Math.min(n+1,4)}/4</div>
+      <p class="hint">Skiven skal være <b>tom</b>. Tryk på billedet på <b>yderkanten af dobbeltringen</b>, lige der hvor wire-linjen mellem to felter møder kanten:</p>
+      <ol class="hint" style="padding-left:20px;margin:6px 0">${names.map((t,i)=>`<li style="${i===n?'color:var(--acc);font-weight:700':i<n?'text-decoration:line-through':''}">${t}</li>`).join('')}</ol>
+      ${calibSVG(n)}
+      ${S.Hi?`<div class="note ok">Kalibrering lagt på. Grønne ringe skal ligge præcis oven på skivens ringe. Passer det ikke, så tryk Nulstil.</div>`:''}
+      <div class="row">
+        <button data-act="undoPt" ${n?'':'disabled'}>↶ Fortryd punkt</button>
+        <button data-act="resetPts" ${n?'':'disabled'}>Nulstil</button>
+        <button class="pri" data-act="startPlay" ${S.Hi?'':'disabled'}>Start spillet →</button>
+      </div>
+    </div>`;
+  }
+  // play
+  const cp=G.players[G.cur], last=G.turn;
+  let chips='';
+  for(let i=0;i<3;i++){const d=last[i]; chips+=`<div class="chip ${d?'f':''}">${d?d.label+`<small>${d.score}</small>`:'–'}</div>`;}
+  const co=checkout(cp.rem,G.dout);
+  const pl=G.players.map((p,i)=>{
+    const avg=p.darts?(p.pts/p.darts*3).toFixed(1):'–';
+    const lt=p.last?` · sidst ${p.last.bust?'BUST':p.last.score}`:'';
+    return `<div class="pl ${i===G.cur&&G.winner<0?'cur':''}"><div class="nm">${esc(p.name)}${G.players.length>1?` <span class="st">· ${p.legs} leg</span>`:''}</div><div class="rem">${p.rem}</div><div class="st">Snit ${avg}${lt}</div></div>`;
+  }).join('');
+  let banner='';
+  if(G.winner>=0) banner=`<div class="note ok"><div class="big">🏆 ${esc(G.players[G.winner].name)} vinder legget!</div><div class="row"><button class="pri" data-act="nextLeg">Nyt leg</button></div></div>`;
+  else if(S.expectRemoval) banner=`<div class="note">Fjern pilene${S.mode==='live'?' – jeg venter på at skiven er tom':''}. <button data-act="removed" style="margin-top:8px;width:100%">Pilene er fjernet ✓</button></div>`;
+  return `<div class="panel">
+    <div class="players">${pl}</div>
+    <div class="chips">${chips}</div>
+    ${co?`<div class="hint">Udgang for ${esc(cp.name)}: <b style="color:var(--acc)">${co.join(' · ')}</b></div>`:''}
+    ${banner}
+    ${S.msg?`<div class="note">${S.msg}</div>`:''}
+    ${S.mode==='photo'&&G.winner<0?`<div class="row"><button class="pri" data-act="photo">📷 Tag foto</button></div>`:''}
+    <div class="row">
+      <button data-act="undo">↶ Fortryd</button>
+      <button data-act="fix" class="${S.fixing?'warn':''}">${S.fixing?'Tryk på billedet…':'✎ Ret sidste pil'}</button>
+      <button data-act="manual">⌨ Tast pil</button>
+      <button data-act="endturn">Næste spiller</button>
+    </div>
+  </div>`;
+}
+function underHTML(){
+  if(S.stage!=='play') return '';
+  return `<div class="panel" style="margin-top:10px">
+    <label style="margin-top:0">Følsomhed for pil-genkendelse: <b id="thv">${S.thresh}</b> <span class="hint">(lavere = mere følsom)</span></label>
+    <input type="range" min="12" max="60" value="${S.thresh}" id="thr">
+    <div class="row"><button data-act="recal">Ny kalibrering</button><button data-act="newgame" class="bad">Nyt spil</button></div>
+  </div>`;
+}
+function calibSVG(n){
+  const pts=[[9,'1'],[99,'2'],[189,'3'],[279,'4']];
+  let dots=pts.map(([a,l],i)=>{const t=a*Math.PI/180,x=70+62*Math.sin(t),y=70-62*Math.cos(t);
+    return `<circle cx="${x}" cy="${y}" r="9" fill="${i<n?'#2fd08a':i===n?'#ffb347':'#445'}"/><text x="${x}" y="${y+4}" font-size="11" text-anchor="middle" fill="#04140c" font-weight="700">${l}</text>`;}).join('');
+  let ring=''; for(let k=0;k<20;k++){const a=k*18*Math.PI/180; ring+=`<line x1="70" y1="70" x2="${70+62*Math.sin(a+.157)}" y2="${70-62*Math.cos(a+.157)}" stroke="#2c3a43" stroke-width="1"/>`;}
+  const nums=ORDER.map((v,k)=>{const a=k*18*Math.PI/180;return `<text x="${70+50*Math.sin(a)}" y="${70-50*Math.cos(a)+3}" font-size="8" text-anchor="middle" fill="#92a3ad">${v}</text>`;}).join('');
+  return `<svg viewBox="0 0 140 140" width="150" style="display:block;margin:6px auto"><circle cx="70" cy="70" r="62" fill="#10171b" stroke="#445"/>${ring}${nums}${dots}</svg>`;
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// ---------- tegning ----------
+function boardPolyline(r,steps=96){
+  const p=[]; for(let i=0;i<=steps;i++){const a=i/steps*2*Math.PI; const q=applyH(S.Hb,r*Math.sin(a),-r*Math.cos(a)); p.push(q);} return p;
+}
+function loop(){
+  requestAnimationFrame(loop);
+  if(!viewCtx||!viewEl) return;
+  if(S.live&&!S.frozen&&video.readyState>=2) capCtx.drawImage(video,0,0,S.W,S.H);
+  viewCtx.drawImage(cap,0,0);
+  if(S.Hb){
+    viewCtx.lineWidth=1.5; viewCtx.strokeStyle='rgba(47,208,138,.85)';
+    for(const r of [170,162,107,99,15.9,6.35]){
+      const p=boardPolyline(r); viewCtx.beginPath(); p.forEach(([x,y],i)=>i?viewCtx.lineTo(x,y):viewCtx.moveTo(x,y)); viewCtx.stroke();
+    }
+    viewCtx.strokeStyle='rgba(47,208,138,.35)'; viewCtx.beginPath();
+    for(let k=0;k<20;k++){const a=(9+18*k)*Math.PI/180; const p1=applyH(S.Hb,15.9*Math.sin(a),-15.9*Math.cos(a)),p2=applyH(S.Hb,170*Math.sin(a),-170*Math.cos(a)); viewCtx.moveTo(p1[0],p1[1]); viewCtx.lineTo(p2[0],p2[1]);}
+    viewCtx.stroke();
+  }
+  S.pts.forEach(([x,y],i)=>{viewCtx.fillStyle='#ffb347';viewCtx.beginPath();viewCtx.arc(x,y,6,0,7);viewCtx.fill();viewCtx.fillStyle='#000';viewCtx.font='bold 11px sans-serif';viewCtx.textAlign='center';viewCtx.fillText(i+1,x,y+4);});
+  S.marks.forEach((m,i)=>{
+    const fresh=i>=S.marks.length-3;
+    viewCtx.strokeStyle=fresh?'#ff4d6d':'rgba(255,77,109,.45)'; viewCtx.lineWidth=2;
+    viewCtx.beginPath(); viewCtx.arc(m.x,m.y,9,0,7); viewCtx.moveTo(m.x-14,m.y); viewCtx.lineTo(m.x+14,m.y); viewCtx.moveTo(m.x,m.y-14); viewCtx.lineTo(m.x,m.y+14); viewCtx.stroke();
+    viewCtx.fillStyle='#fff'; viewCtx.font='bold 14px sans-serif'; viewCtx.textAlign='left'; viewCtx.strokeStyle='#000'; viewCtx.lineWidth=3;
+    viewCtx.strokeText(m.label,m.x+12,m.y-10); viewCtx.fillText(m.label,m.x+12,m.y-10);
+  });
+}
+
+// ---------- kamera ----------
+async function startLive(){
+  S.camErr='';
+  try{
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia) throw new Error('nocam');
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+    video.srcObject=stream; await video.play();
+    await new Promise(r=>{ if(video.videoWidth) r(); else video.onloadedmetadata=r; });
+    setSize(video.videoWidth,video.videoHeight);
+    S.live=true; S.mode='live'; S.frozen=false;
+  }catch(e){
+    S.live=false;
+    S.camErr='Live-kamera er ikke tilgængeligt her (siden må ikke bruge kameraet, eller du har afvist adgang). Brug foto-tilstand, eller åbn filen direkte i browseren på tabletten for live-kamera.';
+  }
+  render();
+}
+function loadPhoto(file){
+  return new Promise((res,rej)=>{
+    const url=URL.createObjectURL(file), img=new Image();
+    img.onload=()=>{
+      if(S.stage==='source'||!S.hasSize){ setSize(img.naturalWidth,img.naturalHeight); S.hasSize=true; }
+      capCtx.drawImage(img,0,0,S.W,S.H); URL.revokeObjectURL(url); res();
+    };
+    img.onerror=rej; img.src=url;
+  });
+}
+fileIn.addEventListener('change',async()=>{
+  const f=fileIn.files[0]; fileIn.value=''; if(!f) return;
+  await loadPhoto(f);
+  if(S.stage==='source'){ S.mode='photo'; S.live=false; S.frozen=true; S.stage='calib'; S.pts=[];S.Hi=null;S.Hb=null; render(); }
+  else if(S.stage==='play'){ analyzePhoto(); }
+});
+
+// ---------- kalibrering ----------
+function onViewTap(ev){
+  const r=viewEl.getBoundingClientRect();
+  const x=(ev.clientX-r.left)/r.width*S.W, y=(ev.clientY-r.top)/r.height*S.H;
+  if(S.stage==='calib'){
+    if(S.pts.length>=4) return;
+    S.pts.push([x,y]);
+    if(S.pts.length===4) computeCalib();
+    render();
+  }else if(S.stage==='play'&&S.fixing){
+    S.fixing=false;
+    const snap=hist[hist.length-1];
+    if(!snap||snap.type!=='dart'){S.msg='Kan kun rette en pil, der lige er registreret.';render();return;}
+    restore(hist.pop());
+    addDartAtImage(x,y);
+  }
+}
+function computeCalib(){
+  const H=homography(S.pts,calibBoardPts());
+  if(!H){S.pts=[];return;}
+  S.Hi=H; S.Hb=invert3(H);
+  // maske: pixels inden for ~185 mm fra centrum
+  const m=new Uint8Array(S.W*S.H); let n=0;
+  for(let y=0;y<S.H;y++) for(let x=0;x<S.W;x++){
+    const [bx,by,w]=applyH(H,x,y);
+    if(w>0&&Math.hypot(bx,by)<=185){m[y*S.W+x]=1;n++;}
+  }
+  S.mask=m; S.maskN=n;
+}
+
+// ---------- spil ----------
+function snapshot(type){ hist.push({type,G:JSON.stringify(G),marks:JSON.stringify(S.marks),er:S.expectRemoval}); if(hist.length>200)hist.shift(); }
+function restore(s){ G=JSON.parse(s.G); S.marks=JSON.parse(s.marks); S.expectRemoval=s.er; }
+function addDartAtImage(x,y){
+  if(!S.Hi) return;
+  const [bx,by]=applyH(S.Hi,x,y);
+  addDart(dartFromBoard(bx,by),x,y);
+}
+function addDart(d,x,y){
+  if(G.winner>=0) return;
+  if(S.expectRemoval){S.expectRemoval=false;}
+  snapshot('dart');
+  if(x!=null) S.marks.push({x,y,label:d.label});
+  const res=addDartTo(G,d);
+  S.msg = res==='bust' ? 'BUST – scoren for turen annulleres.' : res==='win' ? '' : '';
+  if(res==='bust'||res==='turn') S.expectRemoval=true;
+  if(S.marks.length>6) S.marks=S.marks.slice(-6);
+  render();
+}
+function nextTurnMarks(){ /* markører beholdes (de ældre vises svagere) */ }
+
+// ---------- analyse ----------
+function analyzeLive(){
+  if(S.busy||S.stage!=='play'||!S.Hi||G.winner>=0) return;
+  S.busy=true;
+  try{
+    const cur=grabGray();
+    const base=findDarts(S.baseline,cur,S.W,S.H,S.mask,{T:S.thresh,max:6});
+    if(base.length===0){ // tom skive
+      if(S.expectRemoval){S.expectRemoval=false; S.msg='';render();}
+      else if(G.turn.length>0){ snapshot('end'); endTurnManual(G); S.expectRemoval=false; render(); }
+      S.prev=cur; return;
+    }
+    if(S.expectRemoval) return; // venter på at pile fjernes
+    const remaining=3-G.turn.length;
+    const fresh=findDarts(S.prev,cur,S.W,S.H,S.mask,{T:S.thresh,max:remaining});
+    if(fresh.length){ S.prev=cur; for(const t of fresh){ if(G.winner>=0||S.expectRemoval) break; addDartAtImage(t.x,t.y); } }
+  } finally { S.busy=false; }
+}
+function analyzePhoto(){
+  const cur=grabGray();
+  if(S.expectRemoval){ S.prev=S.baseline; S.expectRemoval=false; }
+  const remaining=3-G.turn.length;
+  const fresh=findDarts(S.prev,cur,S.W,S.H,S.mask,{T:S.thresh,max:remaining});
+  if(!fresh.length){ S.msg='Fandt ingen ny pil i billedet. Prøv igen, eller brug “Tast pil” / “Ret sidste pil”.'; render(); return; }
+  S.msg=''; S.prev=cur;
+  for(const t of fresh){ if(G.winner>=0||S.expectRemoval) break; addDartAtImage(t.x,t.y); }
+}
+// Bevægelse → ro → analyse (live)
+setInterval(()=>{
+  if(S.stage!=='play'||S.mode!=='live'||!S.live||video.readyState<2) return;
+  smCtx.drawImage(video,0,0,sm.width,sm.height);
+  const g=grayOf(sm,smCtx,sm.width,sm.height,false);
+  if(S.smPrev&&S.smPrev.length===g.length){
+    let ch=0; for(let i=0;i<g.length;i++) if(Math.abs(g[i]-S.smPrev[i])>25) ch++;
+    const frac=ch/g.length;
+    if(frac>0.006){S.motion=true;S.lastMotion=Date.now();}
+    else if(S.motion&&Date.now()-S.lastMotion>800){S.motion=false; analyzeLive();}
+  }
+  S.smPrev=g;
+},150);
+
+// ---------- manuelt bræt ----------
+function drawBoard(){
+  const c=$('#boardCanvas'),x=c.getContext('2d'),cx=230,cy=230,k=cx/200; // 200 mm = kant
+  x.clearRect(0,0,460,460); x.fillStyle='#111'; x.beginPath(); x.arc(cx,cy,cx,0,7); x.fill();
+  function seg(r1,r2,a1,a2,col){x.beginPath();x.arc(cx,cy,r2*k,a1,a2);x.arc(cx,cy,r1*k,a2,a1,true);x.closePath();x.fillStyle=col;x.fill();}
+  for(let i=0;i<20;i++){
+    const a1=(i*18-9-90)*Math.PI/180,a2=(i*18+9-90)*Math.PI/180, even=i%2===0;
+    const sing=even?'#1a1a1a':'#e8dcc0', ring=even?'#d9382f':'#1f9d55';
+    seg(15.9,99,a1,a2,sing); seg(99,107,a1,a2,ring); seg(107,162,a1,a2,sing); seg(162,170,a1,a2,ring);
+    const a=(i*18-90)*Math.PI/180; x.fillStyle='#fff'; x.font='bold 20px sans-serif'; x.textAlign='center'; x.textBaseline='middle';
+    x.fillText(ORDER[i],cx+185*k*Math.cos(a),cy+185*k*Math.sin(a));
+  }
+  x.beginPath();x.arc(cx,cy,15.9*k,0,7);x.fillStyle='#1f9d55';x.fill();
+  x.beginPath();x.arc(cx,cy,6.35*k,0,7);x.fillStyle='#d9382f';x.fill();
+}
+$('#boardCanvas').addEventListener('pointerdown',ev=>{
+  const c=$('#boardCanvas'),r=c.getBoundingClientRect();
+  const px=(ev.clientX-r.left)/r.width*460-230, py=(ev.clientY-r.top)/r.height*460-230;
+  const k=230/200; addDart(dartFromBoard(px/k,py/k)); $('#modal').classList.add('hide');
+});
+$('#mMiss').onclick=()=>{addDart({num:0,mult:0,score:0,label:'Miss'});$('#modal').classList.add('hide');};
+$('#mClose').onclick=()=>$('#modal').classList.add('hide');
+
+// ---------- events ----------
+app.addEventListener('input',e=>{
+  if(e.target.dataset.name!=null) S.setup.names[+e.target.dataset.name]=e.target.value;
+  if(e.target.id==='thr'){S.thresh=+e.target.value;$('#thv').textContent=S.thresh;}
+});
+app.addEventListener('click',e=>{
+  const b=e.target.closest('[data-act]'); if(!b) return;
+  const a=b.dataset.act,v=b.dataset.v;
+  if(a==='n'){S.setup.n=+v;render();}
+  else if(a==='start'){S.setup.start=+v;render();}
+  else if(a==='dout'){S.setup.dout=v==='1';render();}
+  else if(a==='go'){S.stage='source';S.hasSize=false;S.mode=null;render();}
+  else if(a==='startLive') startLive();
+  else if(a==='photo'){fileIn.click();}
+  else if(a==='freeze'){ S.frozen=true; S.stage='calib'; S.pts=[];S.Hi=null;S.Hb=null; render(); }
+  else if(a==='undoPt'){S.pts.pop();S.Hi=null;S.Hb=null;render();}
+  else if(a==='resetPts'){S.pts=[];S.Hi=null;S.Hb=null;render();}
+  else if(a==='startPlay'){
+    S.baseline=grabGray(); S.prev=S.baseline; S.frozen=false; S.stage='play'; S.expectRemoval=false; S.msg=''; S.marks=[]; hist.length=0;
+    G=newGame(S.setup.names.slice(0,S.setup.n).map((n,i)=>n.trim()||('Spiller '+(i+1))),S.setup.start,S.setup.dout);
+    S.smPrev=null; render();
+  }
+  else if(a==='undo'){ if(hist.length){restore(hist.pop());S.msg='';render();} }
+  else if(a==='fix'){ S.fixing=!S.fixing; if(S.fixing&&!(hist.length&&hist[hist.length-1].type==='dart')){S.fixing=false;S.msg='Ingen pil at rette.';} render(); }
+  else if(a==='manual'){ drawBoard(); $('#modal').classList.remove('hide'); }
+  else if(a==='endturn'){ snapshot('end'); endTurnManual(G); S.expectRemoval=true; S.msg=''; render(); }
+  else if(a==='removed'){ S.expectRemoval=false; S.prev=S.baseline; S.msg=''; render(); }
+  else if(a==='nextLeg'){ nextLeg(G); S.expectRemoval=true; S.marks=[]; hist.length=0; render(); }
+  else if(a==='recal'){ S.stage=S.live?'source':'source'; S.frozen=false; S.pts=[];S.Hi=null;S.Hb=null;S.hasSize=false; S.marks=[]; render(); }
+  else if(a==='newgame'){ if(S.live&&video.srcObject){video.srcObject.getTracks().forEach(t=>t.stop());S.live=false;} S.stage='setup'; S.Hi=null;S.Hb=null;S.pts=[]; render(); }
+});
+render(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
