@@ -50,6 +50,9 @@ canvas#view{width:100%;height:auto;display:block;touch-action:manipulation}
 .modal canvas{width:100%;height:auto;display:block;touch-action:manipulation}
 input[type=range]{width:100%}
 .hide{display:none!important}
+.coBig{background:#112a1d;border:2px solid var(--acc);border-radius:12px;padding:10px 14px;margin-bottom:10px;text-align:center}
+.coBig.none{background:var(--panel2);border-color:var(--line)}
+.coMain{font-size:38px;font-weight:800;color:var(--acc);line-height:1.15;margin:4px 0;font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -343,10 +346,15 @@ function sideHTML(){
   let chips='';
   for(let i=0;i<3;i++){const d=last[i]; chips+=`<div class="chip ${d?'f':''}">${d?d.label+`<small>${d.score}</small>`:'–'}</div>`;}
   let coBox='';
-  if(G.winner<0&&cp.rem<=170){
+  if(G.winner<0){
     const dl=3-G.turn.length, outs=[];
-    for(let k=1;k<=dl;k++){ const r=checkoutExact(cp.rem,G.dout,k); if(r) outs.push(`<div><span class="st">${k} ${k===1?'pil':'pile'}:</span> <b style="color:var(--acc);font-size:18px">${r.join(' · ')}</b></div>`); }
-    coBox=`<div class="co">${outs.join('')||'<div class="st">Ingen udgang med de pile, der er tilbage</div>'}</div>`;
+    if(cp.rem<=170) for(let k=1;k<=dl;k++){ const r=checkoutExact(cp.rem,G.dout,k); if(r) outs.push(r); }
+    const head=`${esc(cp.name)} · ${cp.rem} rest · ${dl} ${dl===1?'pil':'pile'} tilbage`;
+    if(outs.length){
+      coBox=`<div class="coBig"><div class="st">${head}</div><div class="coMain">${outs[0].join('  ›  ')}</div>${outs.length>1?`<div class="st">Andre veje: ${outs.slice(1).map(r=>r.join(' › ')).join('  |  ')}</div>`:''}</div>`;
+    } else {
+      coBox=`<div class="coBig none"><div class="st">${head}</div><div class="coMain" style="font-size:22px;color:var(--mut)">${cp.rem>170?'Sigt på T20':'Ingen udgang endnu'}</div></div>`;
+    }
   }
   const pl=G.players.map((p,i)=>{
     const avg=p.darts?(p.pts/p.darts*3).toFixed(1):'–';
@@ -357,9 +365,9 @@ function sideHTML(){
   if(G.winner>=0) banner=`<div class="note ok"><div class="big">🏆 ${esc(G.players[G.winner].name)} vinder legget!</div><div class="row"><button class="pri" data-act="nextLeg">Nyt leg</button></div></div>`;
   else if(S.expectRemoval) banner=`<div class="note">Fjern pilene${S.mode==='live'?' – jeg venter på at skiven er tom':''}. <button data-act="removed" style="margin-top:8px;width:100%">Pilene er fjernet ✓</button></div>`;
   return `<div class="panel">
+    ${coBox}
     <div class="players">${pl}</div>
     <div class="chips">${chips}</div>
-    ${coBox?`<div class="hint" style="margin-bottom:4px">Udgang for ${esc(cp.name)} (${cp.rem}):</div>${coBox}`:''}
     ${banner}
     ${S.msg?`<div class="note">${S.msg}</div>`:''}
     ${S.mode==='photo'&&G.winner<0?`<div class="row"><button class="pri" data-act="photo">📷 Tag foto</button></div>`:''}
